@@ -1,0 +1,36 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "AI Automation SaaS Backend API",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "nodemon index.js",
+    "dev": "node --watch index.js",
+    "db:init": "node src/db/initDb.js",
+    "db:push": "node src/db/initDb.js",
+    "drizzle:push": "drizzle-kit push",
+    "clean:workflows": "node --input-type=module -e \"import fs from 'fs'; ['src/models/workflowModel.js', 'src/controllers/workflowController.js', 'src/controllers/webhookController.js', 'src/routes/workflowRoutes.js', 'src/services/aiService.js'].forEach(f => { try { fs.unlinkSync(f); console.log('Removed ' + f); } catch(e){} })\"",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.750.0",
+    "@pinecone-database/pinecone": "^4.1.0",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "dotenv": "^18.0.10",
+    "drizzle-orm": "^0.39.3",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemon": "^3.1.14",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.30.4"
+  }
+}
