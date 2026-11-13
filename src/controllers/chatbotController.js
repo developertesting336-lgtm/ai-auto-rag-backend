@@ -74,11 +74,19 @@ export const queryChatbot = async (req, res, next) => {
     if (!company) {
       return res.status(401).json({
         success: false,
-        error: 'Invalid or revoked company API key.',
+        error: 'This company or chatbot no longer exists, or the API key is invalid or revoked.',
       });
     }
 
-    // 2. Resolve LLM API Key (User-stored Key or system env)
+    // 2. Check if company has any policy documents in database
+    const existingPolicies = await db
+      .select({ id: company_policies.id, title: company_policies.title })
+      .from(company_policies)
+      .where(eq(company_policies.company_id, company.id));
+
+    const policyCount = existingPolicies.length;
+
+    // 3. Resolve LLM API Key (STRICTLY user-provided key - system .env fallback is disabled)
     const [userGemini] = await db
       .select()
       .from(api_keys)
@@ -93,51 +101,66 @@ export const queryChatbot = async (req, res, next) => {
       .orderBy(desc(api_keys.created_at))
       .limit(1);
 
-    const geminiKey = userGemini?.encrypted_key || process.env.GEMINI_API_KEY;
-    const openaiKey = userOpenAI?.encrypted_key || process.env.OPENAI_API_KEY;
+    const geminiKey = userGemini?.encrypted_key;
+    const openaiKey = userOpenAI?.encrypted_key;
 
     if (!geminiKey && !openaiKey) {
-      return res.status(503).json({
+      return res.status(403).json({
         success: false,
-        error: 'AI service unavailable: No Gemini or OpenAI API Key configured in .env or your Integrations tab.',
+        requiresApiKey: true,
+        error: 'Google Gemini API key required: The company owner has not configured an API key. Please add your Google Gemini API key in the dashboard under "API Keys" before implementing or querying this chatbot.',
       });
     }
 
     const activeProvider = geminiKey ? 'gemini' : 'openai';
     const activeKey = geminiKey || openaiKey;
 
-    // 3. Generate Vector Embedding for User's Question
+    // 4. Generate Vector Embedding & Query Pinecone (only if policies exist)
     let matches = [];
-    try {
-      const [queryVector] = await generateEmbeddings([message.trim()], activeKey, activeProvider);
-      if (queryVector) {
-        matches = await querySimilarPolicyChunks({
-          companyId: company.id,
-          queryVector,
-          topK: 4,
-        });
+    if (policyCount > 0) {
+      try {
+        const [queryVector] = await generateEmbeddings([message.trim()], activeKey, activeProvider);
+        if (queryVector) {
+          matches = await querySimilarPolicyChunks({
+            companyId: company.id,
+            queryVector,
+            topK: 4,
+          });
+        }
+      } catch (embErr) {
+        console.warn('[Chatbot] Embedding lookup note:', embErr.message);
       }
-    } catch (embErr) {
-      console.warn('[Chatbot] Embedding lookup note:', embErr.message);
     }
 
-    // 4. Construct Context-Aware Prompt
-    const contextText =
-      matches.length > 0
-        ? matches
-            .map((m, idx) => `[Source ${idx + 1}: ${m.title || m.file_name}]\n${m.text}`)
-            .join('\n\n---\n\n')
-        : 'No specific policy document matches were found in the knowledge base.';
+    // 5. Construct Context-Aware Prompt Handling All Scenarios
+    let contextText = '';
+    let policyStatusNotice = '';
+
+    if (policyCount === 0) {
+      contextText = `No policy documents or handbooks have been uploaded for "${company.name}" yet.`;
+      policyStatusNotice = `IMPORTANT: "${company.name}" currently has 0 policy documents in its knowledge base.
+- If the user asks about any internal policy (leaves, hours, refunds, rules, security, etc.), politely inform them that no policy documents have been uploaded to the knowledge base yet and advise them to upload policy documents in the dashboard or contact support.
+- If the user simply says hello or general greeting, respond politely and mention that the company's policy documents are awaiting upload.`;
+    } else if (matches.length === 0) {
+      contextText = `The knowledge base contains ${policyCount} document(s), but no relevant sections matched the user's question.`;
+      policyStatusNotice = `IMPORTANT: The knowledge base does not contain information answering this specific question.
+- Politely explain that this specific detail is not found in "${company.name}"'s published policies.
+- Do NOT make up or hallucinate policies.
+- Offer to direct them to human customer support.`;
+    } else {
+      contextText = matches
+        .map((m, idx) => `[Source ${idx + 1}: ${m.title || m.file_name}]\n${m.text}`)
+        .join('\n\n---\n\n');
+      policyStatusNotice = `Base your response authoritatively and concisely on the provided policy documentation above.`;
+    }
 
     const systemPrompt = `You are the official AI representative and customer support assistant for "${company.name}".
 Your job is to assist users accurately, politely, and authoritatively based on the company's verified policy documents.
 
 Guidelines:
-1. Always maintain a professional, helpful, and courteous tone.
-2. Ground your answers in the provided policy documentation context below.
-3. If the answer is clearly provided in the context, synthesize a concise, structured response.
-4. If the documentation does not contain enough information to answer the question, politely explain that the specific detail is not covered in current policy and offer to connect them to the support team.
-5. Do NOT fabricate internal company details not present in the context.
+1. Maintain a professional, helpful, and courteous tone.
+2. ${policyStatusNotice}
+3. Never invent internal facts, numbers, or rules not present in the context.
 
 --- OFFICIAL COMPANY CONTEXT ---
 ${contextText}

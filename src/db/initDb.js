@@ -123,8 +123,35 @@ export const initDb = async () => {
       );
     `);
 
+    await query(`ALTER TABLE email_integrations ADD COLUMN IF NOT EXISTS webhook_token VARCHAR(255);`);
+    await query(`ALTER TABLE email_integrations ADD COLUMN IF NOT EXISTS ai_prompt TEXT;`);
     await query(`CREATE INDEX IF NOT EXISTS idx_email_integrations_user_id ON email_integrations(user_id);`);
     await query(`CREATE INDEX IF NOT EXISTS idx_email_integrations_provider ON email_integrations(provider);`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_email_integrations_webhook_token ON email_integrations(webhook_token);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_email_integrations_account_id ON email_integrations(account_id);`);
+
+    // 5b. Inbound Received Emails Table (Unipile Webhook Events)
+    await query(`
+      CREATE TABLE IF NOT EXISTS inbound_emails (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        account_id VARCHAR(255),
+        message_id VARCHAR(255),
+        from_email VARCHAR(255),
+        from_name VARCHAR(255),
+        to_email VARCHAR(255),
+        subject TEXT,
+        snippet TEXT,
+        body TEXT,
+        reply_status VARCHAR(50) DEFAULT 'received',
+        reply_text TEXT,
+        raw_payload JSONB,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_user_id ON inbound_emails(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_account_id ON inbound_emails(account_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_created_at ON inbound_emails(created_at DESC);`);
 
     // 6. Chatbot Client API Keys Table (Used by users for websites and widgets)
     await query(`

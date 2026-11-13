@@ -136,6 +136,28 @@ export const deletePolicyVectors = async (policyId, chunkCount = 50) => {
 };
 
 /**
+ * Delete all vectors associated with a company
+ * @param {string} companyId
+ */
+export const deleteCompanyVectors = async (companyId) => {
+  const index = getPineconeIndex();
+  if (!index) return false;
+
+  try {
+    await index.deleteMany({
+      filter: {
+        company_id: { $eq: companyId },
+      },
+    });
+    return true;
+  } catch (err) {
+    // Some Pinecone tiers may require namespace or ID list; fallback safely
+    console.warn('[Pinecone] Delete by company_id note:', err.message);
+    return false;
+  }
+};
+
+/**
  * Query Pinecone for top-K policy chunks matching a query vector
  * Strictly scoped to the specified companyId
  * @param {Object} params

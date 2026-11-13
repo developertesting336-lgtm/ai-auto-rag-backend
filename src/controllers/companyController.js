@@ -5,7 +5,7 @@ import { api_keys } from '../models/apiKey.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { uploadFileToR2, deleteFileFromR2 } from '../services/r2Service.js';
 import { extractTextFromPdf, chunkText, generateEmbeddings } from '../services/embeddingService.js';
-import { upsertPolicyVectors, deletePolicyVectors } from '../services/pineconeService.js';
+import { upsertPolicyVectors, deletePolicyVectors, deleteCompanyVectors } from '../services/pineconeService.js';
 
 /**
  * Company & Policy Document Controller
@@ -177,7 +177,7 @@ export const uploadPolicy = async (req, res, next) => {
         chunkCount = chunks.length;
 
         if (chunks.length > 0) {
-          // Look up user's Gemini or OpenAI key or fallback to system environment
+          // Look up user's Gemini or OpenAI key (strictly user-provided key)
           const [userGemini] = await db
             .select()
             .from(api_keys)
@@ -192,13 +192,13 @@ export const uploadPolicy = async (req, res, next) => {
             .orderBy(desc(api_keys.created_at))
             .limit(1);
 
-          const geminiKey = userGemini?.encrypted_key || process.env.GEMINI_API_KEY;
-          const openaiKey = userOpenAI?.encrypted_key || process.env.OPENAI_API_KEY;
+          const geminiKey = userGemini?.encrypted_key;
+          const openaiKey = userOpenAI?.encrypted_key;
           const activeKey = geminiKey || openaiKey;
           const activeProvider = geminiKey ? 'gemini' : 'openai';
 
           if (!activeKey) {
-            embErrorMessage = 'AI API key not detected in server environment. Restart your backend after editing .env.';
+            embErrorMessage = 'Google Gemini API key required: Please add your API key in the "API Keys" tab before uploading and vectorizing policy documents into Pinecone.';
           } else if (!process.env.PINECONE_API_KEY) {
             embErrorMessage = 'PINECONE_API_KEY is not set in backend/.env.';
           } else {
@@ -347,6 +347,9 @@ export const deleteCompany = async (req, res, next) => {
       }
       await deletePolicyVectors(p.id, p.chunk_count || 50).catch(() => {});
     }
+
+    // Purge any remaining vectors scoped to this company
+    await deleteCompanyVectors(id).catch(() => {});
 
     // Delete company (cascades policies and chatbot keys)
     await db.delete(companies).where(eq(companies.id, id));
