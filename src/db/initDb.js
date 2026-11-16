@@ -152,6 +152,10 @@ export const initDb = async () => {
     await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_user_id ON inbound_emails(user_id);`);
     await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_account_id ON inbound_emails(account_id);`);
     await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_created_at ON inbound_emails(created_at DESC);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_inbound_emails_message_id ON inbound_emails(message_id);`);
+    await query(`ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS raw_payload JSONB;`);
+    await query(`ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS body TEXT;`);
+    await query(`ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS snippet TEXT;`);
 
     // 6. Chatbot Client API Keys Table (Used by users for websites and widgets)
     await query(`
@@ -173,7 +177,57 @@ export const initDb = async () => {
     await query(`CREATE INDEX IF NOT EXISTS idx_chatbot_api_keys_user_id ON chatbot_api_keys(user_id);`);
     await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chatbot_api_keys_key ON chatbot_api_keys(api_key);`);
 
-    // 7. Trigger function for updated_at
+    // 7. Subscriptions Table (Stripe & Plan Gating)
+    await query(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        stripe_customer_id VARCHAR(255),
+        stripe_subscription_id VARCHAR(255),
+        plan_id VARCHAR(100) NOT NULL DEFAULT 'starter',
+        plan_name VARCHAR(100) NOT NULL DEFAULT 'Starter Plan',
+        amount INTEGER NOT NULL DEFAULT 1900,
+        currency VARCHAR(10) NOT NULL DEFAULT 'usd',
+        interval VARCHAR(20) NOT NULL DEFAULT 'month',
+        status VARCHAR(50) NOT NULL DEFAULT 'inactive',
+        current_period_start TIMESTAMP WITH TIME ZONE,
+        current_period_end TIMESTAMP WITH TIME ZONE,
+        cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_sub_id ON subscriptions(stripe_subscription_id);`);
+    await query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_id VARCHAR(100) DEFAULT 'starter';`);
+    await query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'inactive';`);
+
+    // 8. Payments Table (Transaction History & Invoices)
+    await query(`
+      CREATE TABLE IF NOT EXISTS payments (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        stripe_payment_intent_id VARCHAR(255),
+        stripe_invoice_id VARCHAR(255),
+        amount INTEGER NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'usd',
+        status VARCHAR(50) NOT NULL DEFAULT 'paid',
+        plan_id VARCHAR(100),
+        plan_name VARCHAR(100),
+        receipt_url TEXT,
+        invoice_pdf TEXT,
+        failure_reason TEXT,
+        paid_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_payments_user_id ON payments(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at DESC);`);
+    await query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS plan_id VARCHAR(100);`);
+    await query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS plan_name VARCHAR(100);`);
+
+    // 9. Trigger function for updated_at
     await query(`
       CREATE OR REPLACE FUNCTION update_updated_at_column()
       RETURNS TRIGGER AS $$

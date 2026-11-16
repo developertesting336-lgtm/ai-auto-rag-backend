@@ -6,6 +6,7 @@ import {
   boolean,
   timestamp,
   index,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import { users } from './user.js';
 
@@ -51,11 +52,13 @@ export const inbound_emails = pgTable(
     body: text('body'),
     reply_status: varchar('reply_status', { length: 50 }).default('received'),
     reply_text: text('reply_text'),
+    raw_payload: jsonb('raw_payload'),
     created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
     index('idx_inbound_emails_user_id').on(table.user_id),
     index('idx_inbound_emails_account_id').on(table.account_id),
+    index('idx_inbound_emails_message_id').on(table.message_id),
     index('idx_inbound_emails_created_at').on(table.created_at),
   ]
 );

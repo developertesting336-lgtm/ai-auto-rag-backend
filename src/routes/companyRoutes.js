@@ -10,6 +10,7 @@ import {
 } from '../controllers/companyController.js';
 import { regenerateCompanyKey } from '../controllers/chatbotController.js';
 import { verifyToken } from '../middleware/authMiddleware.js';
+import { requireSubscription } from '../middleware/subscriptionMiddleware.js';
 
 let upload = { single: () => (req, res, next) => next() };
 
@@ -30,10 +31,10 @@ router.get('/my', getMyCompany);
 router.post('/', createCompany);
 router.put('/:id', updateCompany);
 router.delete('/:id', deleteCompany);
-router.post('/regenerate-key', regenerateCompanyKey);
+router.post('/regenerate-key', requireSubscription, regenerateCompanyKey);
 
-// Policies (Handles both multipart file upload and JSON)
-router.post('/policies', upload.single('file'), uploadPolicy);
+// Policies (Handles both multipart file upload and JSON) - requires paid plan to index into Pinecone
+router.post('/policies', requireSubscription, upload.single('file'), uploadPolicy);
 router.get('/:company_id/policies', getPolicies);
 router.delete('/policies/:id', deletePolicy);
 

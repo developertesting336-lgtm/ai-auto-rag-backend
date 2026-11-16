@@ -12,8 +12,15 @@ const PORT = process.env.PORT || 8000;
 // Enable CORS
 app.use(cors());
 
-// Body parsing middleware
-app.use(express.json({ limit: '25mb' }));
+// Body parsing middleware (capturing rawBody for Stripe Webhook verification)
+app.use(
+  express.json({
+    limit: '25mb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString('utf8');
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
 // Root welcome route

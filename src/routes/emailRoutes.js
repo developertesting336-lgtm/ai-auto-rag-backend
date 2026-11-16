@@ -5,8 +5,11 @@ import {
   saveEmailPrompt,
   handleWebhook,
   getInboundEmails,
+  getInboundEmailById,
+  simulateInboundEmail,
 } from '../controllers/emailController.js';
 import { verifyToken } from '../middleware/authMiddleware.js';
+import { requireSubscription } from '../middleware/subscriptionMiddleware.js';
 
 const router = express.Router();
 
@@ -19,10 +22,12 @@ router.post('/webhook', handleWebhook);
 // Protected routes for managing Unipile credentials & viewing received emails
 router.use(verifyToken);
 router.get('/settings', getUnipileSettings);
-router.post('/settings', saveUnipileSettings);
-router.put('/prompt', saveEmailPrompt);
-router.post('/prompt', saveEmailPrompt);
+router.post('/settings', requireSubscription, saveUnipileSettings);
+router.put('/prompt', requireSubscription, saveEmailPrompt);
+router.post('/prompt', requireSubscription, saveEmailPrompt);
 router.get('/inbound', getInboundEmails);
+router.get('/inbound/:id', getInboundEmailById);
+router.post('/simulate', requireSubscription, simulateInboundEmail);
 
 export default router;
 

@@ -6,6 +6,7 @@ import aiRoutes from './aiRoutes.js';
 import companyRoutes from './companyRoutes.js';
 import emailRoutes from './emailRoutes.js';
 import chatbotRoutes from './chatbotRoutes.js';
+import billingRoutes from './billingRoutes.js';
 
 const router = express.Router();
 
@@ -17,5 +18,6 @@ router.use('/ai', aiRoutes);
 router.use('/companies', companyRoutes);
 router.use('/email', emailRoutes);
 router.use('/chatbot', chatbotRoutes);
+router.use('/billing', billingRoutes);
 
 export default router;

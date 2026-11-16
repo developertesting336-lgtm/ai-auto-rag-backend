@@ -272,22 +272,30 @@ export const handleWebhook = async (req, res) => {
 
     // Extract email data from Unipile mail_received event
     const emailData = payload.data || payload;
-    const fromEmail =
-      typeof emailData.from === 'object'
-        ? (emailData.from.email || emailData.from.address || '')
-        : (emailData.from || '');
-    const fromName =
-      typeof emailData.from === 'object'
-        ? (emailData.from.name || '')
-        : '';
+    let fromEmail = '';
+    let fromName = '';
+
+    if (typeof emailData.from === 'object' && emailData.from !== null) {
+      fromEmail = emailData.from.email || emailData.from.identifier || emailData.from.address || '';
+      fromName = emailData.from.name || emailData.from.display_name || '';
+    } else if (typeof emailData.from === 'string') {
+      const match = emailData.from.match(/^(.*?)\s*<(.+?)>$/);
+      if (match) {
+        fromName = match[1].trim();
+        fromEmail = match[2].trim();
+      } else {
+        fromEmail = emailData.from.trim();
+      }
+    }
 
     const toEmail = Array.isArray(emailData.to)
-      ? emailData.to.map((t) => (typeof t === 'object' ? t.email || t.address : t)).join(', ')
+      ? emailData.to.map((t) => (typeof t === 'object' && t !== null ? t.email || t.identifier || t.address : t)).join(', ')
       : (emailData.to || '');
 
     const subject = emailData.subject || 'No Subject';
-    const body = emailData.body || emailData.text || emailData.body_plain || emailData.snippet || '';
-    const snippet = emailData.snippet || (body ? body.slice(0, 160) : '');
+    const body = emailData.body || emailData.body_plain || emailData.body_html || emailData.text || emailData.snippet || '';
+    const plainText = body.replace(/<[^>]*>?/gm, '').trim();
+    const snippet = emailData.snippet || (plainText ? plainText.slice(0, 180) : '');
     const messageId = emailData.id || emailData.message_id || payload.id || null;
 
     // Store inbound email event in database
@@ -304,6 +312,7 @@ export const handleWebhook = async (req, res) => {
         snippet: snippet,
         body: body,
         reply_status: 'received',
+        raw_payload: payload,
       })
       .returning();
 
@@ -332,11 +341,152 @@ export const getInboundEmails = async (req, res, next) => {
       .from(inbound_emails)
       .where(eq(inbound_emails.user_id, req.user.id))
       .orderBy(desc(inbound_emails.created_at))
-      .limit(50);
+      .limit(100);
 
     return res.status(200).json({
       success: true,
       emails,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Fetch a single inbound email by ID, and if possible fetch live details from Unipile
+ */
+export const getInboundEmailById = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const db = getDb();
+
+    // Look up email by DB uuid
+    const [email] = await db
+      .select()
+      .from(inbound_emails)
+      .where(and(eq(inbound_emails.user_id, req.user.id), eq(inbound_emails.id, id)))
+      .limit(1);
+
+    if (!email) {
+      return res.status(404).json({ success: false, error: 'Email record not found.' });
+    }
+
+    // Check if user has an active Unipile integration
+    const [integration] = await db
+      .select()
+      .from(email_integrations)
+      .where(and(eq(email_integrations.user_id, req.user.id), eq(email_integrations.provider, 'unipile')))
+      .limit(1);
+
+    let unipileLive = null;
+    let unipileNote = null;
+
+    // If email has Unipile message ID and user has API key, fetch live from Unipile
+    if (email.message_id && integration?.api_key && !email.message_id.startsWith('msg_sim_')) {
+      try {
+        const unipileEndpoints = [
+          `https://api.unipile.com/api/v1/emails/${email.message_id}`,
+          `https://api.unipile.com/api/v1/messages/${email.message_id}`,
+        ];
+
+        for (const endpoint of unipileEndpoints) {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+            const uniRes = await fetch(endpoint, {
+              headers: {
+                'X-API-KEY': integration.api_key,
+                Accept: 'application/json',
+              },
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (uniRes.ok) {
+              const data = await uniRes.json();
+              if (data && (data.id || data.subject || data.body)) {
+                unipileLive = data;
+                break;
+              }
+            }
+          } catch (fetchErr) {
+            unipileNote = `Unipile fetch note: ${fetchErr.message}`;
+          }
+        }
+      } catch (err) {
+        unipileNote = err.message;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      email,
+      unipileLive,
+      unipileNote,
+      source: unipileLive ? 'unipile_live' : 'database',
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Simulate an inbound email arrival for testing the webhook pipeline
+ */
+export const simulateInboundEmail = async (req, res, next) => {
+  try {
+    const {
+      from_name = 'Jane Doe',
+      from_email = 'jane.doe@acmecorp.com',
+      to_email = 'support@yourdomain.com',
+      subject = 'Question regarding enterprise refund & SLA policies',
+      body = 'Hi Team,\n\nI reviewed your published documentation and wanted to verify your cancellation policy and standard response SLAs for enterprise accounts.\n\nCould you also share your security protocols?\n\nThank you,\nJane Doe\nVP of Operations, Acme Corp',
+    } = req.body || {};
+
+    const db = getDb();
+
+    const [integration] = await db
+      .select()
+      .from(email_integrations)
+      .where(and(eq(email_integrations.user_id, req.user.id), eq(email_integrations.provider, 'unipile')))
+      .limit(1);
+
+    const mockMessageId = `msg_sim_${crypto.randomBytes(8).toString('hex')}`;
+    const plainSnippet = body.replace(/<[^>]*>?/gm, '').slice(0, 180);
+
+    const [saved] = await db
+      .insert(inbound_emails)
+      .values({
+        user_id: req.user.id,
+        account_id: integration?.account_id || 'acc_unipile_demo',
+        message_id: mockMessageId,
+        from_email,
+        from_name,
+        to_email,
+        subject,
+        snippet: plainSnippet,
+        body,
+        reply_status: 'received',
+        raw_payload: {
+          event: 'mail_received',
+          simulated: true,
+          id: mockMessageId,
+          account_id: integration?.account_id || 'acc_unipile_demo',
+          date: new Date().toISOString(),
+          from: { name: from_name, email: from_email },
+          to: [{ email: to_email }],
+          subject,
+          snippet: plainSnippet,
+          body,
+        },
+      })
+      .returning();
+
+    return res.status(201).json({
+      success: true,
+      message: 'Simulated inbound webhook email created and saved to database.',
+      email: saved,
     });
   } catch (err) {
     next(err);
@@ -349,5 +499,7 @@ export default {
   saveEmailPrompt,
   handleWebhook,
   getInboundEmails,
+  getInboundEmailById,
+  simulateInboundEmail,
 };
 
