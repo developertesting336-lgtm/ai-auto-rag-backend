@@ -25,18 +25,19 @@ export async function executeAiModelInference({
 
   // 1. Google Gemini
   if (prov === 'gemini') {
-    let targetModel = (model || 'gemini-3.8-flash').replace(/^models\//, '').trim();
+    let targetModel = (model || 'gemini-3.1-flash-lite').replace(/^models\//, '').trim();
     if (
       targetModel === 'gemini-2.0-flash' ||
       targetModel === 'gemini-2.5-flash' ||
       targetModel === 'gemini-1.5-flash' ||
+      targetModel === 'gemini-3.8-flash' ||
       !targetModel
     ) {
-      targetModel = 'gemini-3.8-flash';
+      targetModel = 'gemini-3.1-flash-lite';
     }
 
     const candidateModels = Array.from(
-      new Set([targetModel, 'gemini-3.8-flash', 'gemini-flash-lite-latest', 'gemini-flash-latest'])
+      new Set([targetModel, 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash'])
     );
 
     const contents = [];

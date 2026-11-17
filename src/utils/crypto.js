@@ -52,12 +52,28 @@ export function decryptKey(cipherText) {
     const authTag = Buffer.from(parts[3], 'hex');
     const encryptedHex = parts[4];
 
-    const key = getDerivedKey();
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    // Candidate keys to try (handles .env KEYS_HASH changes and legacy default secrets)
+    const rawCandidates = [
+      (process.env.KEYS_HASH || '').replace(/^['"]|['"]$/g, ''),
+      process.env.KEYS_HASH,
+      'default_ai_automation_secret_key_2026',
+    ].filter(Boolean);
+
+    for (const secret of rawCandidates) {
+      try {
+        const derivedKey = crypto.createHash('sha256').update(secret).digest();
+        const decipher = crypto.createDecipheriv('aes-256-gcm', derivedKey, iv);
+        decipher.setAuthTag(authTag);
+        let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        if (decrypted) return decrypted;
+      } catch (candidateErr) {
+        // try next candidate
+      }
+    }
+
+    console.error('[crypto.decryptKey] Unable to decrypt key with any candidate secret.');
+    return trimmed;
   } catch (err) {
     console.error('[crypto.decryptKey] Error decrypting key:', err.message);
     return trimmed;

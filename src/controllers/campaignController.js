@@ -91,7 +91,7 @@ export const createCampaign = async (req, res, next) => {
     const token = generateCampaignWebhookToken();
 
     // Look up AI model details if provided
-    let modelName = 'gemini-3.8-flash';
+    let modelName = 'gemini-3.1-flash-lite';
     let modelProvider = 'gemini';
 
     if (ai_model_id) {
@@ -386,7 +386,7 @@ export const handleCampaignWebhook = async (req, res) => {
     // Resolve AI Model & Key
     let aiKey = process.env.GEMINI_API_KEY;
     let provider = campaign.ai_provider || 'gemini';
-    let modelName = campaign.ai_model_name || 'gemini-3.8-flash';
+    let modelName = campaign.ai_model_name || 'gemini-3.1-flash-lite';
     let baseUrl = null;
 
     if (campaign.ai_model_id) {
@@ -534,7 +534,7 @@ export const simulateCampaignTrigger = async (req, res, next) => {
     // Resolve AI Model & Key
     let aiKey = process.env.GEMINI_API_KEY;
     let provider = campaign.ai_provider || 'gemini';
-    let modelName = campaign.ai_model_name || 'gemini-3.8-flash';
+    let modelName = campaign.ai_model_name || 'gemini-3.1-flash-lite';
     let baseUrl = null;
 
     if (campaign.ai_model_id) {
