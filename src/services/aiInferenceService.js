@@ -1,17 +1,18 @@
 import { decryptKey } from '../utils/crypto.js';
 
 /**
- * Robust Multi-Provider AI Inference Service
- * Supports Google Gemini, OpenAI, Anthropic Claude, Groq, DeepSeek, and OpenAI-compatible endpoints
+ * Universal Multi-Provider AI Inference Service
+ * Seamlessly supports Google Gemini, OpenAI, Anthropic Claude, Groq, DeepSeek,
+ * Mistral, OpenRouter, Ollama, Together AI, and ANY custom OpenAI-compatible API.
  */
 export async function executeAiModelInference({
   provider = 'gemini',
-  model = 'gemini-2.0-flash',
+  model,
   apiKey,
   systemPrompt = '',
   prompt = '',
   temperature = 0.7,
-  maxTokens = 2048,
+  maxTokens,
   baseUrl = null,
 }) {
   const plainApiKey = decryptKey(apiKey);
@@ -32,12 +33,16 @@ export async function executeAiModelInference({
       contents.push({ parts: [{ text: prompt }] });
     }
 
+    const generationConfig = {
+      temperature: Number(temperature) || 0.7,
+    };
+    if (maxTokens) {
+      generationConfig.maxOutputTokens = Number(maxTokens);
+    }
+
     const bodyPayload = {
       contents,
-      generationConfig: {
-        temperature: Number(temperature) || 0.7,
-        maxOutputTokens: Number(maxTokens) || 2048,
-      },
+      generationConfig,
     };
 
     if (systemPrompt) {
@@ -71,55 +76,13 @@ export async function executeAiModelInference({
     };
   }
 
-  // 2. OpenAI / Groq / DeepSeek / Custom (OpenAI-compatible endpoints)
-  if (prov === 'openai' || prov === 'groq' || prov === 'deepseek' || prov === 'custom') {
-    let endpoint = 'https://api.openai.com/v1/chat/completions';
-    if (prov === 'groq') endpoint = 'https://api.groq.com/openai/v1/chat/completions';
-    if (prov === 'deepseek') endpoint = 'https://api.deepseek.com/chat/completions';
-    if (baseUrl) endpoint = baseUrl.endsWith('/chat/completions') ? baseUrl : `${baseUrl.replace(/\/$/, '')}/chat/completions`;
-
-    const messages = [];
-    if (systemPrompt) {
-      messages.push({ role: 'system', content: systemPrompt });
-    }
-    messages.push({ role: 'user', content: prompt || 'Hello' });
-
-    const res = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${plainApiKey}`,
-      },
-      body: JSON.stringify({
-        model: model || (prov === 'groq' ? 'llama-3.3-70b-versatile' : prov === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini'),
-        messages,
-        temperature: Number(temperature) || 0.7,
-        max_tokens: Number(maxTokens) || 2048,
-      }),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error?.message || `${provider} API request failed with status ${res.status}`);
-    }
-
-    const text = data.choices?.[0]?.message?.content || '';
-    return {
-      success: true,
-      provider: prov,
-      model,
-      text,
-      tokens: data.usage?.total_tokens || 0,
-      durationMs: Date.now() - startTime,
-    };
-  }
-
-  // 3. Anthropic Claude
+  // 2. Anthropic Claude
   if (prov === 'anthropic') {
-    const claudeEndpoint = 'https://api.anthropic.com/v1/messages';
+    const claudeEndpoint = baseUrl || 'https://api.anthropic.com/v1/messages';
+    const claudeModel = model || 'claude-3-5-sonnet-20241022';
     const bodyPayload = {
-      model: model || 'claude-3-5-sonnet-20241022',
-      max_tokens: Number(maxTokens) || 2048,
+      model: claudeModel,
+      max_tokens: Number(maxTokens) || 4096,
       temperature: Number(temperature) || 0.7,
       messages: [{ role: 'user', content: prompt || 'Hello' }],
     };
@@ -147,14 +110,74 @@ export async function executeAiModelInference({
     return {
       success: true,
       provider: 'anthropic',
-      model,
+      model: claudeModel,
       text,
       tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
       durationMs: Date.now() - startTime,
     };
   }
 
-  throw new Error(`Unsupported AI model provider: ${provider}`);
+  // 3. Universal OpenAI-compatible handler (OpenAI, Groq, DeepSeek, Mistral, OpenRouter, Ollama, Custom APIs)
+  let endpoint = 'https://api.openai.com/v1/chat/completions';
+  let resolvedModel = model || 'gpt-4o-mini';
+
+  if (prov === 'groq') {
+    endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    resolvedModel = model || 'llama-3.3-70b-versatile';
+  } else if (prov === 'deepseek') {
+    endpoint = 'https://api.deepseek.com/chat/completions';
+    resolvedModel = model || 'deepseek-chat';
+  } else if (prov === 'mistral') {
+    endpoint = 'https://api.mistral.ai/v1/chat/completions';
+    resolvedModel = model || 'mistral-large-latest';
+  } else if (prov === 'openrouter') {
+    endpoint = 'https://openrouter.ai/api/v1/chat/completions';
+    resolvedModel = model || 'openai/gpt-4o';
+  } else if (baseUrl) {
+    endpoint = baseUrl.endsWith('/chat/completions')
+      ? baseUrl
+      : `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+    resolvedModel = model || 'default';
+  }
+
+  const messages = [];
+  if (systemPrompt) {
+    messages.push({ role: 'system', content: systemPrompt });
+  }
+  messages.push({ role: 'user', content: prompt || 'Hello' });
+
+  const payload = {
+    model: resolvedModel,
+    messages,
+    temperature: Number(temperature) || 0.7,
+  };
+  if (maxTokens) {
+    payload.max_tokens = Number(maxTokens);
+  }
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${plainApiKey}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error?.message || `${provider} API request failed with status ${res.status}`);
+  }
+
+  const text = data.choices?.[0]?.message?.content || '';
+  return {
+    success: true,
+    provider: prov,
+    model: resolvedModel,
+    text,
+    tokens: data.usage?.total_tokens || 0,
+    durationMs: Date.now() - startTime,
+  };
 }
 
 export default {

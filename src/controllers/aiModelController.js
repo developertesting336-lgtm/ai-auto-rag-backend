@@ -5,6 +5,17 @@ import { eq, and, desc } from 'drizzle-orm';
 import { encryptKey, decryptKey, maskApiKey } from '../utils/crypto.js';
 import { executeAiModelInference } from '../services/aiInferenceService.js';
 
+const DEFAULT_MODELS = {
+  gemini: 'gemini-2.0-flash',
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-3-5-sonnet-20241022',
+  groq: 'llama-3.3-70b-versatile',
+  deepseek: 'deepseek-chat',
+  mistral: 'mistral-large-latest',
+  openrouter: 'openai/gpt-4o',
+  custom: 'default',
+};
+
 /**
  * Get all AI models configured by the user
  */
@@ -41,17 +52,18 @@ export const getAiModels = async (req, res, next) => {
 
 /**
  * Create a new AI model configuration
+ * Supports any AI model and provider without requiring model_name or max_tokens
  */
 export const createAiModel = async (req, res, next) => {
   try {
     const {
       name,
       provider = 'gemini',
-      model_name = 'gemini-2.0-flash',
+      model_name,
       api_key,
       base_url,
       temperature = 0.7,
-      max_tokens = 2048,
+      max_tokens = 4096,
     } = req.body;
 
     if (!name || !name.trim()) {
@@ -60,14 +72,14 @@ export const createAiModel = async (req, res, next) => {
     if (!api_key || !api_key.trim()) {
       return res.status(400).json({ success: false, error: 'API Key is required.' });
     }
-    if (!model_name || !model_name.trim()) {
-      return res.status(400).json({ success: false, error: 'Model identifier is required.' });
-    }
 
     const trimmedKey = api_key.trim();
     const encryptedKey = encryptKey(trimmedKey);
     const keyHint = maskApiKey(trimmedKey);
     const prov = (provider || 'gemini').toLowerCase().trim();
+
+    // Universal model resolution: use provided model_name, provider default, or the display name
+    const resolvedModel = (model_name && model_name.trim()) || DEFAULT_MODELS[prov] || name.trim() || 'default';
 
     const db = getDb();
 
@@ -77,17 +89,17 @@ export const createAiModel = async (req, res, next) => {
         user_id: req.user.id,
         name: name.trim(),
         provider: prov,
-        model_name: model_name.trim(),
+        model_name: resolvedModel,
         api_key_encrypted: encryptedKey,
         key_hint: keyHint,
         base_url: base_url ? base_url.trim() : null,
-        temperature: String(temperature || 0.7),
-        max_tokens: Number(max_tokens) || 2048,
+        temperature: String(temperature ?? 0.7),
+        max_tokens: Number(max_tokens) || 4096,
         is_active: true,
       })
       .returning();
 
-    // Also mirror to api_keys table so chatbot and document vectorizer can use it automatically
+    // Mirror key to api_keys table so chatbot and other modules can use it
     try {
       const [existingKey] = await db
         .select()
@@ -99,7 +111,7 @@ export const createAiModel = async (req, res, next) => {
         await db.insert(api_keys).values({
           user_id: req.user.id,
           provider: prov,
-          name: `${name.trim()} (${model_name.trim()})`,
+          name: name.trim(),
           key_hint: keyHint,
           encrypted_key: encryptedKey,
         });
@@ -157,7 +169,7 @@ export const updateAiModel = async (req, res, next) => {
     if (model_name) updates.model_name = model_name.trim();
     if (base_url !== undefined) updates.base_url = base_url ? base_url.trim() : null;
     if (temperature !== undefined) updates.temperature = String(temperature);
-    if (max_tokens !== undefined) updates.max_tokens = Number(max_tokens);
+    if (max_tokens !== undefined) updates.max_tokens = Number(max_tokens) || 4096;
     if (is_active !== undefined) updates.is_active = Boolean(is_active);
 
     if (api_key && api_key.trim()) {
@@ -246,13 +258,12 @@ export const testAiModel = async (req, res, next) => {
       apiKey: plainKey,
       baseUrl: model.base_url,
       temperature: Number(model.temperature) || 0.7,
-      maxTokens: 100,
       prompt,
     });
 
     return res.status(200).json({
       success: true,
-      message: `Successfully connected to ${model.name} (${model.model_name})`,
+      message: `Successfully connected to ${model.name}`,
       reply: result.text,
       durationMs: result.durationMs,
       tokens: result.tokens,
