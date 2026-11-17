@@ -45,6 +45,9 @@ if (Pool) {
     ? {
         connectionString: cleanConnectionString,
         ssl: isSslRequired ? { rejectUnauthorized: false } : false,
+        max: 3, // Keep pool conservative to stay well below Aiven connection limits
+        idleTimeoutMillis: 5000,
+        connectionTimeoutMillis: 10000,
       }
     : {
         host: process.env.DB_HOST || 'localhost',
@@ -53,6 +56,9 @@ if (Pool) {
         password: process.env.DB_PASSWORD || 'postgres',
         database: process.env.DB_NAME || 'defaultdb',
         ssl: isSslRequired ? { rejectUnauthorized: false } : false,
+        max: 3,
+        idleTimeoutMillis: 5000,
+        connectionTimeoutMillis: 10000,
       };
 
   pool = new Pool(connectionConfig);
@@ -60,6 +66,20 @@ if (Pool) {
   pool.on('error', (err) => {
     console.error('Unexpected error on idle PostgreSQL client:', err.message);
   });
+
+  // Gracefully drain pool on nodemon restart or process termination so connections aren't leaked in Aiven
+  const gracefulDrain = async (cb) => {
+    if (pool) {
+      try {
+        await pool.end();
+      } catch (e) {}
+    }
+    if (cb) cb();
+  };
+
+  process.once('SIGUSR2', () => gracefulDrain(() => process.kill(process.pid, 'SIGUSR2')));
+  process.on('SIGINT', () => gracefulDrain(() => process.exit(0)));
+  process.on('SIGTERM', () => gracefulDrain(() => process.exit(0)));
 }
 
 /**
@@ -87,18 +107,24 @@ export const testConnection = async () => {
   if (!pool) {
     return { success: false, message: '"pg" module is not installed. Run "npm install".' };
   }
-  try {
-    const res = await pool.query('SELECT NOW() as current_time, current_database() as database, version() as version');
-    return {
-      success: true,
-      message: 'Connected to Aiven PostgreSQL database successfully',
-      data: res.rows[0],
-    };
-  } catch (err) {
-    return {
-      success: false,
-      message: `Failed to connect to PostgreSQL: ${err.message}`,
-    };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await pool.query('SELECT NOW() as current_time, current_database() as database, version() as version');
+      return {
+        success: true,
+        message: 'Connected to Aiven PostgreSQL database successfully',
+        data: res.rows[0],
+      };
+    } catch (err) {
+      if (attempt < 3 && err.message?.includes('remaining connection slots')) {
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+      return {
+        success: false,
+        message: `Failed to connect to PostgreSQL: ${err.message}`,
+      };
+    }
   }
 };
 
