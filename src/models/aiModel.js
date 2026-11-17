@@ -20,7 +20,7 @@ export const ai_models = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     name: varchar('name', { length: 255 }).notNull(),
     provider: varchar('provider', { length: 50 }).notNull(), // 'gemini', 'openai', 'anthropic', 'groq', 'deepseek', 'mistral', 'custom'
-    model_name: varchar('model_name', { length: 150 }).notNull(), // e.g. 'gemini-2.0-flash', 'gpt-4o'
+    model_name: varchar('model_name', { length: 150 }).notNull(), // e.g. 'gemini-3.8-flash', 'gpt-4o'
     api_key_encrypted: text('api_key_encrypted').notNull(),
     key_hint: varchar('key_hint', { length: 50 }).notNull(),
     base_url: varchar('base_url', { length: 255 }),

@@ -25,8 +25,19 @@ export async function executeAiModelInference({
 
   // 1. Google Gemini
   if (prov === 'gemini') {
-    const geminiModel = model || 'gemini-2.0-flash';
-    const geminiUrl = baseUrl || `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${plainApiKey}`;
+    let targetModel = (model || 'gemini-3.8-flash').replace(/^models\//, '').trim();
+    if (
+      targetModel === 'gemini-2.0-flash' ||
+      targetModel === 'gemini-2.5-flash' ||
+      targetModel === 'gemini-1.5-flash' ||
+      !targetModel
+    ) {
+      targetModel = 'gemini-3.8-flash';
+    }
+
+    const candidateModels = Array.from(
+      new Set([targetModel, 'gemini-3.8-flash', 'gemini-flash-lite-latest', 'gemini-flash-latest'])
+    );
 
     const contents = [];
     if (prompt) {
@@ -51,27 +62,55 @@ export async function executeAiModelInference({
       };
     }
 
-    const res = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': plainApiKey,
-      },
-      body: JSON.stringify(bodyPayload),
-    });
+    let lastError = null;
+    let successfulData = null;
+    let chosenModel = targetModel;
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error?.message || `Gemini inference failed with HTTP ${res.status}`);
+    for (const cand of candidateModels) {
+      try {
+        const geminiUrl = baseUrl || `https://generativelanguage.googleapis.com/v1beta/models/${cand}:generateContent?key=${plainApiKey}`;
+        const res = await fetch(geminiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': plainApiKey,
+          },
+          body: JSON.stringify(bodyPayload),
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          successfulData = data;
+          chosenModel = cand;
+          break;
+        } else {
+          lastError = new Error(data.error?.message || `Gemini inference failed with HTTP ${res.status}`);
+          // If 503 (high demand) or 404 (model deprecated/not available), gracefully try next candidate
+          if (res.status === 503 || res.status === 404) {
+            continue;
+          }
+          // If 400 (invalid key), stop and throw immediately
+          throw lastError;
+        }
+      } catch (err) {
+        lastError = err;
+        if (err.message?.includes('API key not valid')) {
+          throw err;
+        }
+      }
     }
 
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    if (!successfulData) {
+      throw lastError || new Error('Gemini inference failed across candidate models.');
+    }
+
+    const text = successfulData.candidates?.[0]?.content?.parts?.[0]?.text || '';
     return {
       success: true,
       provider: 'gemini',
-      model: geminiModel,
+      model: chosenModel,
       text,
-      tokens: data.usageMetadata?.totalTokenCount || 0,
+      tokens: successfulData.usageMetadata?.totalTokenCount || 0,
       durationMs: Date.now() - startTime,
     };
   }

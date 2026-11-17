@@ -7,7 +7,7 @@ import { encryptKey, decryptKey, maskApiKey } from '../utils/crypto.js';
 import { executeAiModelInference } from '../services/aiInferenceService.js';
 
 const DEFAULT_MODELS = {
-  gemini: 'gemini-2.0-flash',
+  gemini: 'gemini-3.8-flash',
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-5-sonnet-20241022',
   groq: 'llama-3.3-70b-versatile',
