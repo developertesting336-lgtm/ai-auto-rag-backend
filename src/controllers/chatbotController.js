@@ -6,6 +6,7 @@ import { api_keys } from '../models/apiKey.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { generateEmbeddings } from '../services/embeddingService.js';
 import { querySimilarPolicyChunks } from '../services/pineconeService.js';
+import { getUserSubscriptionStatus } from '../middleware/subscriptionMiddleware.js';
 
 /**
  * Public Chatbot Query Endpoint
@@ -75,6 +76,19 @@ export const queryChatbot = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         error: 'This company or chatbot no longer exists, or the API key is invalid or revoked.',
+      });
+    }
+
+    // 1.5 Subscription & 7-Day Trial Check: After 1 week, chatbot should NOT work unless paid
+    const subStatus = await getUserSubscriptionStatus(company.user_id);
+    if (!subStatus.hasActiveSubscription) {
+      return res.status(402).json({
+        success: false,
+        error: subStatus.isTrialExpired
+          ? 'Chatbot Offline: The 7-day free trial for this organization has expired. The owner must upgrade to a paid plan in Billing & Plans to resume chatbot operations.'
+          : 'Payment Required: An active subscription is required to use this AI chatbot.',
+        code: 'SUBSCRIPTION_REQUIRED',
+        trialExpired: subStatus.isTrialExpired,
       });
     }
 

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getDb } from '../db/drizzle.js';
 import { email_integrations, inbound_emails } from '../models/emailIntegration.js';
 import { eq, and, desc } from 'drizzle-orm';
+import { getUserSubscriptionStatus } from '../middleware/subscriptionMiddleware.js';
 
 /**
  * Generate a cryptographically secure unique webhook token
@@ -267,6 +268,17 @@ export const handleWebhook = async (req, res) => {
       return res.status(200).json({
         success: false,
         warning: 'Unrecognized webhook token or account_id. Please verify your integration setup.',
+      });
+    }
+
+    // Subscription & 7-Day Trial Check: After 1 week, email automation halts unless paid
+    const subStatus = await getUserSubscriptionStatus(integration.user_id);
+    if (!subStatus.hasActiveSubscription) {
+      console.warn(`[Unipile Webhook] User ${integration.user_id} 7-day trial expired or unpaid. Halting automation.`);
+      return res.status(200).json({
+        success: false,
+        warning: 'Email automation halted: 7-day free trial expired. An active subscription is required to process and automate emails.',
+        trialExpired: subStatus.isTrialExpired,
       });
     }
 

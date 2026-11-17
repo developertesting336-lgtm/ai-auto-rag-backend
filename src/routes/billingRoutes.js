@@ -6,6 +6,7 @@ import {
   createPortal,
   handleStripeWebhook,
   simulatePayment,
+  adjustTrial,
 } from '../controllers/billingController.js';
 import { verifyToken } from '../middleware/authMiddleware.js';
 
@@ -21,5 +22,6 @@ router.get('/history', getPaymentHistory);
 router.post('/create-checkout-session', createCheckout);
 router.post('/create-portal-session', createPortal);
 router.post('/simulate-payment', simulatePayment);
+router.post('/adjust-trial', adjustTrial);
 
 export default router;

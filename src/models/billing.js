@@ -22,7 +22,8 @@ export const subscriptions = pgTable(
     amount: integer('amount').default(1900).notNull(), // amount in cents
     currency: varchar('currency', { length: 10 }).default('usd').notNull(),
     interval: varchar('interval', { length: 20 }).default('month').notNull(),
-    status: varchar('status', { length: 50 }).default('inactive').notNull(), // 'active', 'past_due', 'canceled', 'inactive'
+    status: varchar('status', { length: 50 }).default('inactive').notNull(), // 'active', 'trialing', 'past_due', 'canceled', 'inactive'
+    trial_ends_at: timestamp('trial_ends_at', { withTimezone: true }),
     current_period_start: timestamp('current_period_start', { withTimezone: true }),
     current_period_end: timestamp('current_period_end', { withTimezone: true }),
     cancel_at_period_end: boolean('cancel_at_period_end').default(false).notNull(),

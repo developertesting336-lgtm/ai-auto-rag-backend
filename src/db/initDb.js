@@ -202,6 +202,7 @@ export const initDb = async () => {
     await query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_sub_id ON subscriptions(stripe_subscription_id);`);
     await query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan_id VARCHAR(100) DEFAULT 'starter';`);
     await query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'inactive';`);
+    await query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMP WITH TIME ZONE;`);
 
     // 8. Payments Table (Transaction History & Invoices)
     await query(`

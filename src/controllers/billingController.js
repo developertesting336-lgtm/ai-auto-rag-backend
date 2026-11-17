@@ -1,7 +1,7 @@
 import { getDb } from '../db/drizzle.js';
 import { subscriptions, payments } from '../models/billing.js';
 import { users } from '../models/user.js';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, sql } from 'drizzle-orm';
 import {
   AVAILABLE_PLANS,
   createCheckoutSession,
@@ -16,20 +16,53 @@ import { getUserSubscriptionStatus } from '../middleware/subscriptionMiddleware.
 export const getBillingStatus = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { hasActiveSubscription, status, subscription } = await getUserSubscriptionStatus(userId);
+    const db = getDb();
+
+    // Clean up any old simulated payments so the user's trial is clean and real payments only
+    await db.delete(payments).where(and(eq(payments.user_id, userId), sql`${payments.stripe_payment_intent_id} LIKE 'pi_sim_%'`)).catch(() => {});
+
+    // Clean up simulated subscription customer ID if any so it doesn't masquerade as paid
+    const [existingSub] = await db.select().from(subscriptions).where(eq(subscriptions.user_id, userId)).limit(1);
+    if (existingSub) {
+      const isSimulated = !existingSub.stripe_customer_id || existingSub.stripe_customer_id.startsWith('cus_sim_');
+      if (isSimulated) {
+        const now = new Date();
+        const needsFreshTrial = !existingSub.trial_ends_at || (new Date(existingSub.trial_ends_at) < now && existingSub.status !== 'inactive');
+        const trialEnd = needsFreshTrial
+          ? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+          : existingSub.trial_ends_at;
+
+        await db.update(subscriptions).set({
+          stripe_customer_id: null,
+          stripe_subscription_id: null,
+          status: existingSub.status === 'inactive' ? 'inactive' : 'trialing',
+          amount: 0,
+          plan_name: '7-Day Free Trial',
+          trial_ends_at: trialEnd,
+          updated_at: now,
+        }).where(eq(subscriptions.id, existingSub.id)).catch(() => {});
+      }
+    }
+
+    const subStatus = await getUserSubscriptionStatus(userId);
 
     const isPastDue = Boolean(
-      subscription &&
-      (status === 'past_due' || (subscription.current_period_end && new Date(subscription.current_period_end) < new Date()))
+      subStatus.subscription &&
+      (subStatus.status === 'past_due' || (subStatus.subscription.current_period_end && new Date(subStatus.subscription.current_period_end) < new Date()))
     );
 
     return res.status(200).json({
       success: true,
-      hasActiveSubscription,
-      status,
-      subscription,
+      hasActiveSubscription: subStatus.hasActiveSubscription,
+      isTrialActive: subStatus.isTrialActive,
+      isTrialExpired: subStatus.isTrialExpired,
+      isPaid: subStatus.isPaid,
+      trialDaysRemaining: subStatus.trialDaysRemaining,
+      trialEndsAt: subStatus.trialEndsAt,
+      status: subStatus.status,
+      subscription: subStatus.subscription,
       isPastDue,
-      paymentDue: subscription?.current_period_end || null,
+      paymentDue: subStatus.subscription?.current_period_end || subStatus.trialEndsAt || null,
       plans: AVAILABLE_PLANS,
     });
   } catch (err) {
@@ -45,10 +78,13 @@ export const getPaymentHistory = async (req, res, next) => {
     const userId = req.user.id;
     const db = getDb();
 
+    // Clean up any dummy test payments
+    await db.delete(payments).where(and(eq(payments.user_id, userId), sql`${payments.stripe_payment_intent_id} LIKE 'pi_sim_%'`)).catch(() => {});
+
     const paymentRecords = await db
       .select()
       .from(payments)
-      .where(eq(payments.user_id, userId))
+      .where(and(eq(payments.user_id, userId), sql`${payments.stripe_payment_intent_id} NOT LIKE 'pi_sim_%'`))
       .orderBy(desc(payments.created_at))
       .limit(50);
 
@@ -337,17 +373,17 @@ export const handleStripeWebhook = async (req, res) => {
 };
 
 /**
- * Simulate or Test Payment Success (Development & Testing helper)
+ * Trial activation helper: grants 7-day free trial ($0.00) without fake paid receipts
  */
 export const simulatePayment = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { planId = 'pro' } = req.body;
-    const plan = AVAILABLE_PLANS.find((p) => p.id === planId) || AVAILABLE_PLANS[1];
-
     const db = getDb();
     const now = new Date();
-    const periodEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000); // 30 days ahead
+    const trialEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 full days ahead
+
+    // Clean up any simulated payments so no fake "PAID" receipts show up
+    await db.delete(payments).where(and(eq(payments.user_id, userId), sql`${payments.stripe_payment_intent_id} LIKE 'pi_sim_%'`)).catch(() => {});
 
     const [existingSub] = await db
       .select()
@@ -360,14 +396,15 @@ export const simulatePayment = async (req, res, next) => {
       const [updated] = await db
         .update(subscriptions)
         .set({
-          plan_id: plan.id,
-          plan_name: plan.name,
-          amount: plan.amount,
+          plan_id: 'starter',
+          plan_name: '7-Day Free Trial',
+          amount: 0,
           currency: 'usd',
-          interval: 'month',
-          status: 'active',
-          current_period_start: now,
-          current_period_end: periodEnd,
+          interval: 'week',
+          status: 'trialing',
+          stripe_customer_id: null,
+          stripe_subscription_id: null,
+          trial_ends_at: trialEnd,
           updated_at: now,
         })
         .where(eq(subscriptions.id, existingSub.id))
@@ -378,41 +415,89 @@ export const simulatePayment = async (req, res, next) => {
         .insert(subscriptions)
         .values({
           user_id: userId,
-          stripe_customer_id: `cus_sim_${Date.now()}`,
-          stripe_subscription_id: `sub_sim_${Date.now()}`,
-          plan_id: plan.id,
-          plan_name: plan.name,
-          amount: plan.amount,
+          plan_id: 'starter',
+          plan_name: '7-Day Free Trial',
+          amount: 0,
           currency: 'usd',
-          interval: 'month',
-          status: 'active',
-          current_period_start: now,
-          current_period_end: periodEnd,
+          interval: 'week',
+          status: 'trialing',
+          trial_ends_at: trialEnd,
         })
         .returning();
       savedSub = created;
     }
 
-    // Insert payment record
-    const [savedPayment] = await db
-      .insert(payments)
-      .values({
-        user_id: userId,
-        stripe_payment_intent_id: `pi_sim_${Date.now()}`,
-        amount: plan.amount,
-        currency: 'usd',
-        status: 'paid',
-        plan_id: plan.id,
-        plan_name: plan.name,
-        paid_at: now,
-      })
-      .returning();
-
     return res.status(200).json({
       success: true,
-      message: `Subscription activated on "${plan.name}"! Unipile email automation and custom chatbots are now unlocked.`,
+      message: `7-Day Free Trial activated ($0.00). Unipile email automation and custom chatbots are unlocked for 1 week.`,
       subscription: savedSub,
-      payment: savedPayment,
+      trialEndsAt: trialEnd.toISOString(),
+      isTrialActive: true,
+      isPaid: false,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Developer helper: adjust trial between Active 7-day trial and Expired trial
+ */
+export const adjustTrial = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { action } = req.body; // 'reset' (7 days remaining) or 'expire' (trial expired)
+    const db = getDb();
+    const now = new Date();
+
+    const targetTrialEnd =
+      action === 'expire'
+        ? new Date(now.getTime() - 24 * 60 * 60 * 1000) // Expired yesterday
+        : new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days ahead
+
+    const [existingSub] = await db
+      .select()
+      .from(subscriptions)
+      .where(eq(subscriptions.user_id, userId))
+      .limit(1);
+
+    // Clear any simulated payments
+    await db.delete(payments).where(and(eq(payments.user_id, userId), sql`${payments.stripe_payment_intent_id} LIKE 'pi_sim_%'`)).catch(() => {});
+
+    if (existingSub) {
+      await db
+        .update(subscriptions)
+        .set({
+          status: action === 'expire' ? 'inactive' : 'trialing',
+          stripe_customer_id: null,
+          stripe_subscription_id: null,
+          plan_id: 'starter',
+          plan_name: '7-Day Free Trial',
+          amount: 0,
+          trial_ends_at: targetTrialEnd,
+          updated_at: now,
+        })
+        .where(eq(subscriptions.id, existingSub.id));
+    } else {
+      await db.insert(subscriptions).values({
+        user_id: userId,
+        plan_id: 'starter',
+        plan_name: '7-Day Free Trial',
+        amount: 0,
+        currency: 'usd',
+        status: action === 'expire' ? 'inactive' : 'trialing',
+        trial_ends_at: targetTrialEnd,
+      });
+    }
+
+    const updatedStatus = await getUserSubscriptionStatus(userId);
+    return res.status(200).json({
+      success: true,
+      message:
+        action === 'expire'
+          ? 'Trial expired (Day 8+ simulated). Chatbot & automation locked.'
+          : 'Trial reset to 7 active days! All features unlocked.',
+      ...updatedStatus,
     });
   } catch (err) {
     next(err);
@@ -426,4 +511,5 @@ export default {
   createPortal,
   handleStripeWebhook,
   simulatePayment,
+  adjustTrial,
 };
