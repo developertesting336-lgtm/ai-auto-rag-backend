@@ -2,6 +2,7 @@ import express from 'express';
 import {
   getBillingStatus,
   getPaymentHistory,
+  clearAllPayments,
   createCheckout,
   createPortal,
   handleStripeWebhook,
@@ -19,6 +20,8 @@ router.post('/webhook', handleStripeWebhook);
 router.use(verifyToken);
 router.get('/status', getBillingStatus);
 router.get('/history', getPaymentHistory);
+router.delete('/history', clearAllPayments);
+router.post('/clear-payments', clearAllPayments);
 router.post('/create-checkout-session', createCheckout);
 router.post('/create-portal-session', createPortal);
 router.post('/simulate-payment', simulatePayment);

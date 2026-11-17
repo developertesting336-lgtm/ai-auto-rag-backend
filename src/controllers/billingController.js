@@ -98,6 +98,26 @@ export const getPaymentHistory = async (req, res, next) => {
 };
 
 /**
+ * Empty payments table for user
+ */
+export const clearAllPayments = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const db = getDb();
+
+    await db.delete(payments).where(eq(payments.user_id, userId));
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payment history deleted and table is now completely empty.',
+      payments: [],
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * Create a Stripe Checkout Session
  */
 export const createCheckout = async (req, res, next) => {
@@ -507,6 +527,7 @@ export const adjustTrial = async (req, res, next) => {
 export default {
   getBillingStatus,
   getPaymentHistory,
+  clearAllPayments,
   createCheckout,
   createPortal,
   handleStripeWebhook,
