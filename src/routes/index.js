@@ -1,3 +1,4 @@
+import healthRoutes from './healthRoutes.js';
 import express from 'express';
 import authRoutes from './authRoutes.js';
 import userRoutes from './userRoutes.js';
@@ -23,5 +24,7 @@ router.use('/email', emailRoutes);
 router.use('/campaigns', campaignRoutes);
 router.use('/chatbot', chatbotRoutes);
 router.use('/billing', billingRoutes);
+
+router.use('/health', healthRoutes);
 
 export default router;

@@ -1,3 +1,4 @@
+import { startHourlyHealthScheduler } from './src/services/modelHealthService.js';
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -126,6 +127,13 @@ if (!process.env.VERCEL) {
         await initDb();
       } catch (schemaErr) {
         console.warn(`⚠️ Schema auto-init warning:`, schemaErr.message);
+      }
+
+      // Initialize Automated 1-Hour AI Model Health Checker
+      try {
+        startHourlyHealthScheduler();
+      } catch (schedErr) {
+        console.warn(`⚠️ Health scheduler warning:`, schedErr.message);
       }
     } else {
       console.warn(`⚠️ PostgreSQL Connection: ${dbHealth.message}`);

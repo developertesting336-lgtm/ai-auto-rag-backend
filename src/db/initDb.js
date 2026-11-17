@@ -302,7 +302,42 @@ export const initDb = async () => {
     await query(`CREATE INDEX IF NOT EXISTS idx_campaign_email_logs_user_id ON campaign_email_logs(user_id);`);
     await query(`CREATE INDEX IF NOT EXISTS idx_campaign_email_logs_created_at ON campaign_email_logs(created_at DESC);`);
 
-    // 9. Trigger function for updated_at
+    // 9. AI Model Health Logs Table (Hourly Checker & Latency telemetry)
+    await query(`
+      CREATE TABLE IF NOT EXISTS ai_model_health_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        model_id UUID NOT NULL REFERENCES ai_models(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        status VARCHAR(50) NOT NULL DEFAULT 'healthy',
+        latency_ms INTEGER DEFAULT 0,
+        error_message TEXT,
+        check_type VARCHAR(50) DEFAULT 'hourly_cron',
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_health_logs_model_id ON ai_model_health_logs(model_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_health_logs_user_id ON ai_model_health_logs(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_health_logs_created_at ON ai_model_health_logs(created_at DESC);`);
+
+    // 10. User Notifications Table (Health alerts and Push Events)
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'health_alert' NOT NULL,
+        severity VARCHAR(50) DEFAULT 'warning' NOT NULL,
+        data JSONB,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON user_notifications(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON user_notifications(created_at DESC);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON user_notifications(is_read);`);
+
+    // 11. Trigger function for updated_at
     await query(`
       CREATE OR REPLACE FUNCTION update_updated_at_column()
       RETURNS TRIGGER AS $$
