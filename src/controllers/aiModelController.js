@@ -1,6 +1,7 @@
 import { getDb } from '../db/drizzle.js';
 import { ai_models } from '../models/aiModel.js';
 import { api_keys } from '../models/apiKey.js';
+import { ai_model_health_logs } from '../models/healthLog.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { encryptKey, decryptKey, maskApiKey } from '../utils/crypto.js';
 import { executeAiModelInference } from '../services/aiInferenceService.js';
@@ -213,6 +214,15 @@ export const deleteAiModel = async (req, res, next) => {
   try {
     const { id } = req.params;
     const db = getDb();
+
+    // Clean up any health logs referencing this model first
+    try {
+      await db
+        .delete(ai_model_health_logs)
+        .where(eq(ai_model_health_logs.model_id, id));
+    } catch (logErr) {
+      console.warn('[deleteAiModel] Notice cleaning health logs:', logErr.message);
+    }
 
     const [deleted] = await db
       .delete(ai_models)
