@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getDb } from '../db/drizzle.js';
 import { companies, company_policies } from '../models/company.js';
 import { api_keys } from '../models/apiKey.js';
+import { decryptKey } from '../utils/crypto.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { uploadFileToR2, deleteFileFromR2 } from '../services/r2Service.js';
 import { extractTextFromPdf, chunkText, generateEmbeddings } from '../services/embeddingService.js';
@@ -192,8 +193,8 @@ export const uploadPolicy = async (req, res, next) => {
             .orderBy(desc(api_keys.created_at))
             .limit(1);
 
-          const geminiKey = userGemini?.encrypted_key;
-          const openaiKey = userOpenAI?.encrypted_key;
+          const geminiKey = decryptKey(userGemini?.encrypted_key);
+          const openaiKey = decryptKey(userOpenAI?.encrypted_key);
           const activeKey = geminiKey || openaiKey;
           const activeProvider = geminiKey ? 'gemini' : 'openai';
 

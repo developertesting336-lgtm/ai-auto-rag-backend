@@ -1,6 +1,7 @@
 import { getDb } from '../db/drizzle.js';
 import { api_keys } from '../models/apiKey.js';
 import { eq, and, desc } from 'drizzle-orm';
+import { decryptKey } from '../utils/crypto.js';
 
 export const generateText = async (req, res, next) => {
   try {
@@ -23,7 +24,7 @@ export const generateText = async (req, res, next) => {
       .orderBy(desc(api_keys.created_at))
       .limit(1);
 
-    const apiKey = userKey?.encrypted_key || process.env.GEMINI_API_KEY;
+    const apiKey = decryptKey(userKey?.encrypted_key) || process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
       return res.status(400).json({

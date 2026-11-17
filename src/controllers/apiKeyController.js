@@ -1,6 +1,7 @@
 import { getDb } from '../db/drizzle.js';
 import { api_keys } from '../models/apiKey.js';
 import { eq, and, desc } from 'drizzle-orm';
+import { encryptKey, maskApiKey } from '../utils/crypto.js';
 
 export const saveKey = async (req, res, next) => {
   try {
@@ -15,9 +16,8 @@ export const saveKey = async (req, res, next) => {
     }
 
     const trimmed = api_key.trim();
-    const key_hint = trimmed.length > 8
-      ? `${trimmed.slice(0, 4)}...${trimmed.slice(-4)}`
-      : '••••••••';
+    const key_hint = maskApiKey(trimmed);
+    const encryptedKeyInDb = encryptKey(trimmed);
 
     const [keyRecord] = await db
       .insert(api_keys)
@@ -26,7 +26,7 @@ export const saveKey = async (req, res, next) => {
         provider: provider.toLowerCase().trim(),
         name: name.trim(),
         key_hint,
-        encrypted_key: trimmed,
+        encrypted_key: encryptedKeyInDb,
       })
       .returning({
         id: api_keys.id,

@@ -3,6 +3,7 @@ import { getDb } from '../db/drizzle.js';
 import { companies, company_policies } from '../models/company.js';
 import { chatbot_api_keys } from '../models/chatbotApiKey.js';
 import { api_keys } from '../models/apiKey.js';
+import { decryptKey } from '../utils/crypto.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { generateEmbeddings } from '../services/embeddingService.js';
 import { querySimilarPolicyChunks } from '../services/pineconeService.js';
@@ -115,8 +116,8 @@ export const queryChatbot = async (req, res, next) => {
       .orderBy(desc(api_keys.created_at))
       .limit(1);
 
-    const geminiKey = userGemini?.encrypted_key;
-    const openaiKey = userOpenAI?.encrypted_key;
+    const geminiKey = decryptKey(userGemini?.encrypted_key);
+    const openaiKey = decryptKey(userOpenAI?.encrypted_key);
 
     if (!geminiKey && !openaiKey) {
       return res.status(403).json({

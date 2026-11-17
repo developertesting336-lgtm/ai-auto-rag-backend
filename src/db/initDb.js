@@ -228,6 +228,80 @@ export const initDb = async () => {
     await query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS plan_id VARCHAR(100);`);
     await query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS plan_name VARCHAR(100);`);
 
+    // 9. AI Models Table (Multi-Model Hub with Encrypted API Keys)
+    await query(`
+      CREATE TABLE IF NOT EXISTS ai_models (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        provider VARCHAR(50) NOT NULL,
+        model_name VARCHAR(150) NOT NULL,
+        api_key_encrypted TEXT NOT NULL,
+        key_hint VARCHAR(50) NOT NULL,
+        base_url VARCHAR(255),
+        temperature NUMERIC DEFAULT 0.7,
+        max_tokens INTEGER DEFAULT 2048,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_ai_models_user_id ON ai_models(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_ai_models_provider ON ai_models(provider);`);
+
+    // 10. Email Campaigns Table (Unipile Webhook Driven Automation)
+    await query(`
+      CREATE TABLE IF NOT EXISTS email_campaigns (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        webhook_token VARCHAR(255) UNIQUE NOT NULL,
+        unipile_api_key_encrypted TEXT,
+        unipile_key_hint VARCHAR(50),
+        unipile_account_id VARCHAR(255),
+        unipile_dsn VARCHAR(255),
+        ai_model_id UUID REFERENCES ai_models(id) ON DELETE SET NULL,
+        ai_model_name VARCHAR(150),
+        ai_provider VARCHAR(50),
+        ai_prompt TEXT NOT NULL,
+        status VARCHAR(50) NOT NULL DEFAULT 'active',
+        total_received INTEGER NOT NULL DEFAULT 0,
+        total_replied INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_email_campaigns_user_id ON email_campaigns(user_id);`);
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_email_campaigns_webhook_token ON email_campaigns(webhook_token);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_email_campaigns_status ON email_campaigns(status);`);
+
+    // 11. Campaign Email Logs Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS campaign_email_logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        campaign_id UUID NOT NULL REFERENCES email_campaigns(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message_id VARCHAR(255),
+        account_id VARCHAR(255),
+        from_email VARCHAR(255),
+        from_name VARCHAR(255),
+        to_email VARCHAR(255),
+        subject TEXT,
+        snippet TEXT,
+        body TEXT,
+        reply_status VARCHAR(50) DEFAULT 'received',
+        ai_generated_reply TEXT,
+        ai_model_used VARCHAR(150),
+        error_message TEXT,
+        raw_payload JSONB,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await query(`CREATE INDEX IF NOT EXISTS idx_campaign_email_logs_campaign_id ON campaign_email_logs(campaign_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_campaign_email_logs_user_id ON campaign_email_logs(user_id);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_campaign_email_logs_created_at ON campaign_email_logs(created_at DESC);`);
+
     // 9. Trigger function for updated_at
     await query(`
       CREATE OR REPLACE FUNCTION update_updated_at_column()
