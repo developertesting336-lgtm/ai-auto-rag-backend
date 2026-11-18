@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { getDb } from '../db/drizzle.js';
 import { companies, company_policies } from '../models/company.js';
 import { api_keys } from '../models/apiKey.js';
+import { ai_models } from '../models/aiModel.js';
 import { decryptKey } from '../utils/crypto.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { uploadFileToR2, deleteFileFromR2 } from '../services/r2Service.js';
@@ -178,28 +179,46 @@ export const uploadPolicy = async (req, res, next) => {
         chunkCount = chunks.length;
 
         if (chunks.length > 0) {
-          // Look up user's Gemini or OpenAI key (strictly user-provided key)
-          const [userGemini] = await db
+          // 1. Resolve active AI model from ai_models hub first
+          let activeKey = null;
+          let activeProvider = 'gemini';
+
+          const [configuredModel] = await db
             .select()
-            .from(api_keys)
-            .where(and(eq(api_keys.user_id, req.user.id), eq(api_keys.provider, 'gemini')))
-            .orderBy(desc(api_keys.created_at))
+            .from(ai_models)
+            .where(and(eq(ai_models.user_id, req.user.id), eq(ai_models.is_active, true)))
+            .orderBy(desc(ai_models.created_at))
             .limit(1);
 
-          const [userOpenAI] = await db
-            .select()
-            .from(api_keys)
-            .where(and(eq(api_keys.user_id, req.user.id), eq(api_keys.provider, 'openai')))
-            .orderBy(desc(api_keys.created_at))
-            .limit(1);
+          if (configuredModel) {
+            activeKey = decryptKey(configuredModel.api_key_encrypted);
+            activeProvider = configuredModel.provider?.toLowerCase() || 'gemini';
+          }
 
-          const geminiKey = decryptKey(userGemini?.encrypted_key);
-          const openaiKey = decryptKey(userOpenAI?.encrypted_key);
-          const activeKey = geminiKey || openaiKey;
-          const activeProvider = geminiKey ? 'gemini' : 'openai';
+          // 2. Fall back to legacy api_keys table if ai_models has no key
+          if (!activeKey) {
+            const [userGemini] = await db
+              .select()
+              .from(api_keys)
+              .where(and(eq(api_keys.user_id, req.user.id), eq(api_keys.provider, 'gemini')))
+              .orderBy(desc(api_keys.created_at))
+              .limit(1);
+
+            const [userOpenAI] = await db
+              .select()
+              .from(api_keys)
+              .where(and(eq(api_keys.user_id, req.user.id), eq(api_keys.provider, 'openai')))
+              .orderBy(desc(api_keys.created_at))
+              .limit(1);
+
+            const geminiKey = decryptKey(userGemini?.encrypted_key);
+            const openaiKey = decryptKey(userOpenAI?.encrypted_key);
+            activeKey = geminiKey || openaiKey;
+            activeProvider = geminiKey ? 'gemini' : 'openai';
+          }
 
           if (!activeKey) {
-            embErrorMessage = 'Google Gemini API key required: Please add your API key in the "API Keys" tab before uploading and vectorizing policy documents into Pinecone.';
+            embErrorMessage = 'AI Model required: Please add an active AI Model (Google Gemini, OpenAI, etc.) in the "AI Models" tab to vectorize policy documents into Pinecone.';
           } else if (!process.env.PINECONE_API_KEY) {
             embErrorMessage = 'PINECONE_API_KEY is not set in backend/.env.';
           } else {

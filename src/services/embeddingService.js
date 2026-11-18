@@ -1,3 +1,5 @@
+import zlib from 'zlib';
+
 let pdfParse = null;
 
 try {
@@ -8,24 +10,127 @@ try {
 }
 
 /**
+ * Fallback parser that decompresses raw PDF FlateDecode streams directly
+ * without depending on the cross-reference (XRef) table.
+ */
+function extractFromRawPdfStreams(buffer) {
+  try {
+    const textPieces = [];
+    const bufStr = buffer.toString('binary');
+
+    let searchPos = 0;
+    while (searchPos < bufStr.length) {
+      const streamIdx = bufStr.indexOf('stream', searchPos);
+      if (streamIdx === -1) break;
+
+      let dataStart = streamIdx + 6;
+      if (bufStr[dataStart] === '\r') dataStart++;
+      if (bufStr[dataStart] === '\n') dataStart++;
+
+      const endstreamIdx = bufStr.indexOf('endstream', dataStart);
+      if (endstreamIdx === -1) break;
+
+      let dataEnd = endstreamIdx;
+      if (bufStr[dataEnd - 1] === '\n') dataEnd--;
+      if (bufStr[dataEnd - 1] === '\r') dataEnd--;
+
+      const streamData = buffer.subarray(dataStart, dataEnd);
+      searchPos = endstreamIdx + 9;
+
+      if (streamData.length < 4) continue;
+
+      let decompressed = null;
+      try {
+        decompressed = zlib.inflateSync(streamData);
+      } catch {
+        try {
+          decompressed = zlib.inflateRawSync(streamData);
+        } catch {
+          decompressed = streamData;
+        }
+      }
+
+      if (decompressed) {
+        const streamText = decompressed.toString('latin1');
+        const matches = streamText.match(/\((?:[^()\\]|\\.)*\)/g);
+        if (matches && matches.length > 0) {
+          for (const m of matches) {
+            const raw = m
+              .slice(1, -1)
+              .replace(/\\([()\\])/g, '$1')
+              .replace(/\\n/g, '\n')
+              .replace(/\\r/g, '\r')
+              .replace(/\\t/g, '\t');
+
+            if (/^[a-zA-Z0-9\s.,!?:;'"@#\$%^&*()_\-+=/\\\[\]{}|`~]+$/.test(raw) && raw.trim().length > 1) {
+              textPieces.push(raw.trim());
+            }
+          }
+        }
+      }
+    }
+
+    return textPieces.join(' ').replace(/\s+/g, ' ').trim();
+  } catch (err) {
+    console.warn('[PDF Stream Extractor Note]:', err.message);
+    return '';
+  }
+}
+
+/**
  * Extracts raw textual content from an uploaded PDF file buffer
+ * Uses a resilient 4-layer extraction pipeline:
+ * 1. Sanitization (%PDF- header alignment & fresh memory view)
+ * 2. Primary pdf-parse engine
+ * 3. Modern pdf.js engine (v2.0.550 with automatic XRef recovery)
+ * 4. Raw FlateDecode stream decompressor (bypasses corrupted XRef completely)
  * @param {Buffer} buffer
  * @returns {Promise<string>}
  */
 export const extractTextFromPdf = async (buffer) => {
-  if (!pdfParse) {
-    // Basic fallback if pdf-parse isn't installed yet
-    const raw = buffer.toString('utf-8');
-    return raw.replace(/[^\x20-\x7E\n]/g, ' ').slice(0, 5000);
+  if (!buffer || buffer.length === 0) return '';
+
+  // 1. Sanitize buffer: Align to standard %PDF- header to fix bad byte offsets / leading junk
+  const headerOffset = buffer.indexOf(Buffer.from('%PDF-'));
+  const cleanBuffer = headerOffset > 0 ? Buffer.from(buffer.subarray(headerOffset)) : Buffer.from(buffer);
+
+  // 2. Try primary pdf-parse engine
+  if (pdfParse) {
+    try {
+      const data = await pdfParse(cleanBuffer);
+      if (data && data.text && data.text.trim().length > 20) {
+        return data.text.trim();
+      }
+    } catch (primaryErr) {
+      console.warn(`[PDF Parser] Primary pdf-parse note (${primaryErr.message}). Trying version v2.0.550...`);
+    }
+
+    // 3. Try bundled v2.0.550 with modern XRef recovery
+    try {
+      const dataV2 = await pdfParse(cleanBuffer, { version: 'v2.0.550' });
+      if (dataV2 && dataV2.text && dataV2.text.trim().length > 20) {
+        return dataV2.text.trim();
+      }
+    } catch (v2Err) {
+      console.warn(`[PDF Parser] v2.0.550 note (${v2Err.message}). Trying raw stream decompressor...`);
+    }
   }
 
-  try {
-    const data = await pdfParse(buffer);
-    return data.text || '';
-  } catch (err) {
-    console.error('[PDF Parser] Failed to parse PDF text:', err.message);
-    throw new Error(`Failed to extract text from PDF: ${err.message}`);
+  // 4. Try raw FlateDecode stream decompressor (bypasses corrupt/bad XRef tables entirely)
+  const streamText = extractFromRawPdfStreams(cleanBuffer);
+  if (streamText && streamText.length > 20) {
+    console.log(`[PDF Parser] Successfully extracted ${streamText.length} characters using stream decompressor fallback.`);
+    return streamText;
   }
+
+  // 5. Final fallback: Clean ASCII strings
+  const rawFallback = cleanBuffer.toString('utf-8').replace(/[^\x20-\x7E\n]/g, ' ');
+  const cleaned = rawFallback.replace(/\s+/g, ' ').trim();
+  if (cleaned.length > 20) {
+    return cleaned.slice(0, 10000);
+  }
+
+  throw new Error('Unable to extract text from PDF. The document may be an empty or scanned image PDF without selectable text.');
 };
 
 /**
