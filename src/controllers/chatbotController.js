@@ -3,6 +3,7 @@ import { getDb } from '../db/drizzle.js';
 import { companies, company_policies } from '../models/company.js';
 import { chatbot_api_keys } from '../models/chatbotApiKey.js';
 import { api_keys } from '../models/apiKey.js';
+import { ai_models } from '../models/aiModel.js';
 import { decryptKey } from '../utils/crypto.js';
 import { eq, and, desc } from 'drizzle-orm';
 import { generateEmbeddings } from '../services/embeddingService.js';
@@ -101,34 +102,58 @@ export const queryChatbot = async (req, res, next) => {
 
     const policyCount = existingPolicies.length;
 
-    // 3. Resolve LLM API Key (STRICTLY user-provided key - system .env fallback is disabled)
-    const [userGemini] = await db
+    // 3. Resolve LLM API Key (Checks active AI Models hub first, then legacy api_keys)
+    let activeKey = null;
+    let activeProvider = 'gemini';
+    let activeModelName = 'gemini-3.1-flash-lite';
+
+    // First, check ai_models table
+    const [configuredModel] = await db
       .select()
-      .from(api_keys)
-      .where(and(eq(api_keys.user_id, company.user_id), eq(api_keys.provider, 'gemini')))
-      .orderBy(desc(api_keys.created_at))
+      .from(ai_models)
+      .where(and(eq(ai_models.user_id, company.user_id), eq(ai_models.is_active, true)))
+      .orderBy(desc(ai_models.created_at))
       .limit(1);
 
-    const [userOpenAI] = await db
-      .select()
-      .from(api_keys)
-      .where(and(eq(api_keys.user_id, company.user_id), eq(api_keys.provider, 'openai')))
-      .orderBy(desc(api_keys.created_at))
-      .limit(1);
+    if (configuredModel) {
+      activeKey = decryptKey(configuredModel.api_key_encrypted);
+      activeProvider = configuredModel.provider?.toLowerCase() || 'gemini';
+      activeModelName = configuredModel.model_name || 'gemini-3.1-flash-lite';
+    }
 
-    const geminiKey = decryptKey(userGemini?.encrypted_key);
-    const openaiKey = decryptKey(userOpenAI?.encrypted_key);
+    if (!activeKey) {
+      // Fallback to legacy api_keys table
+      const [userGemini] = await db
+        .select()
+        .from(api_keys)
+        .where(and(eq(api_keys.user_id, company.user_id), eq(api_keys.provider, 'gemini')))
+        .orderBy(desc(api_keys.created_at))
+        .limit(1);
 
-    if (!geminiKey && !openaiKey) {
+      const [userOpenAI] = await db
+        .select()
+        .from(api_keys)
+        .where(and(eq(api_keys.user_id, company.user_id), eq(api_keys.provider, 'openai')))
+        .orderBy(desc(api_keys.created_at))
+        .limit(1);
+
+      const geminiKey = decryptKey(userGemini?.encrypted_key);
+      const openaiKey = decryptKey(userOpenAI?.encrypted_key);
+
+      activeKey = geminiKey || openaiKey;
+      activeProvider = geminiKey ? 'gemini' : openaiKey ? 'openai' : 'gemini';
+    }
+
+    if (!activeKey) {
       return res.status(403).json({
         success: false,
         requiresApiKey: true,
-        error: 'Google Gemini API key required: The company owner has not configured an API key. Please add your Google Gemini API key in the dashboard under "API Keys" before implementing or querying this chatbot.',
+        error: 'AI Model key required: Please add an AI Model with an API key in the dashboard under "AI Models" to power this company chatbot.',
       });
     }
 
-    const activeProvider = geminiKey ? 'gemini' : 'openai';
-    const activeKey = geminiKey || openaiKey;
+    const geminiKey = activeProvider === 'gemini' ? activeKey : null;
+    const openaiKey = activeProvider === 'openai' ? activeKey : null;
 
     // 4. Generate Vector Embedding & Query Pinecone (only if policies exist)
     let matches = [];

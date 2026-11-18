@@ -10,12 +10,19 @@ export const serveChatbotWidget = (req, res) => {
 (function() {
   const currentScript = document.currentScript || Array.from(document.querySelectorAll('script')).pop();
   const apiKey = currentScript ? currentScript.getAttribute('data-api-key') : '';
+  const companyAttr = currentScript ? (currentScript.getAttribute('data-company') || '') : '';
   const apiEndpoint = currentScript ? (currentScript.getAttribute('data-api-endpoint') || '${apiUrl}') : '${apiUrl}';
 
   if (!apiKey) {
     console.error('[AutoFlow Chatbot] Missing data-api-key attribute on script tag.');
     return;
   }
+
+  const initialTitle = companyAttr ? companyAttr + ' AI Assistant' : 'AI Support Assistant';
+  const initialSub = companyAttr ? 'Official ' + companyAttr + ' Knowledge Base' : 'Answers powered by verified company policies';
+  const initialGreeting = companyAttr 
+    ? 'Hello! How can I assist you with ' + companyAttr + '\\'s policies, services, or questions today?'
+    : 'Hello! How can I assist you with our company policies or services today?';
 
   // Create isolated container
   const container = document.createElement('div');
@@ -160,14 +167,14 @@ export const serveChatbotWidget = (req, res) => {
     <div id="autoflow-chat-window">
       <div id="autoflow-chat-header">
         <div>
-          <h4>AI Support Assistant</h4>
-          <p>Answers powered by verified company policies</p>
+          <h4 id="autoflow-chat-title">\${initialTitle}</h4>
+          <p id="autoflow-chat-sub">\${initialSub}</p>
         </div>
         <button id="autoflow-chat-close" aria-label="Close chat">✕</button>
       </div>
       <div id="autoflow-chat-messages">
         <div class="af-msg af-msg-bot">
-          Hello! How can I assist you with our company policies or services today?
+          \${initialGreeting}
         </div>
       </div>
       <form id="autoflow-chat-form">
@@ -234,6 +241,12 @@ export const serveChatbotWidget = (req, res) => {
       const data = await res.json();
 
       if (data.success && data.response) {
+        if (data.company && !companyAttr) {
+          const titleEl = container.querySelector('#autoflow-chat-title');
+          const subEl = container.querySelector('#autoflow-chat-sub');
+          if (titleEl) titleEl.textContent = data.company + ' AI Assistant';
+          if (subEl) subEl.textContent = 'Official ' + data.company + ' Knowledge Base';
+        }
         botMsg.textContent = data.response;
         if (data.sources && data.sources.length > 0) {
           const sourcesDiv = document.createElement('div');
